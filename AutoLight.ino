@@ -1,53 +1,148 @@
+//Скетч для построения системы автоматического освещения для коридоров и других помещений в условиях малой освещенности
+//Программа написана Морозовым Леонидом (_WKAF_) и свободно распространяется. Есть возможность модификации при указании автора исходного проекта.
+//Версия 1.0
+
+//-----------------------//
+//Цифровой датчик движения (1==вкл)
 #define dviz 7
+//ШИМ на выход для питания светодиодной ленты через мосфет
 #define shim 6
-#define temp 0
+//Датчик освещенности на основе фоторезистора
 #define photo 1
+//Потенциометр для настройки яркости
 #define potens 2
-#define butt 8
+//Кнопка для переключения режимов
+#define butt 3
+//Светодиод индикации ждущего режима
+#define ind 4
+
+//------------------------------//
+//Время выключения после активации датчиков (сек.)
+#define off_delay_time 30
+//Время для исключения дребезга механической кнопки (мс)
+#define drebezg 150
+//Время после которого кнопка будет считаться удержанной (мс)
+#define hold 600
+//Подстроечные параметры для включения и выключения ночного режима. Введен гестерезис для исключения мерцания при закате/восходе
+#define night_on 600
+#define night_off 700
+
+//------------------------------//
+//Включение системы
 bool led=true;
+//Флаг кнопки
 bool flag=true;
+//Флаг удержания кнопки
+bool hold_flag=false;
+//Режим постоянного света независимо от условий
+bool AO=false;
+//Переменные для таймеров
 unsigned long butt_delay;
 unsigned long off_delay;
-int night=700;
+unsigned long ind_delay;
+//Переменная ночи
+int night=night_on;
+
+//---------------------------//
+//Установки режимов пинов
 void setup() {
   pinMode(dviz, INPUT);
   pinMode(shim, OUTPUT);
-  pinMode(temp, INPUT);
   pinMode(photo, INPUT);
   pinMode(potens, INPUT);
   pinMode(butt, INPUT_PULLUP);
+  pinMode(ind, OUTPUT);
 }
 
+//---------------------//
+//Прототипы используемых функций
 void butt_check();
+void on_check();
 
+//----------------------//
 void loop() {
+  //Переменная для считывания потенциометра
   int val;
-  if (led && (analogRead(photo)>night) && (digitalRead(dviz)==1)){
+  //Если не включен режим постоянного света
+  if (!AO){
+    //Если система включена, сейчас ночь и сработал датчик движения
+    if (led && (analogRead(photo)>night) && (digitalRead(dviz)==1)){
+      //Устанавливаем значение с потенциометра для ШИМ
+      val=analogRead(potens);
+      val=map(val,0,1023,0,255);
+      val=constrain(val,0, 255);
+      analogWrite(shim, val);
+      //Сбрасываем таймер выключения до тех пор, пока есть движение в поле зрения датчика
+      off_delay=millis();
+      //Гестерезис
+      night=night_on;
+    }
+    //Если хотя бы одно условие не верно, то
+    else{
+      //Если кто-то проходя мимо включил свет, то выключаем подсветку и обновляем таймер
+      if (analogRead(photo)<night){
+        analogWrite(shim, 0);
+        night=night_off;
+        off_delay=millis();
+      }
+      else{
+        //Если прошло время выключения, то выключаем свет
+        if (millis()-off_delay>(off_delay_time*1000)){
+          off_delay=millis();
+          analogWrite(shim, 0);
+          night=night_off;
+        }
+      }
+    }
+  }
+  //Если режим постоянного света, то выставляем на ШИМ значение яркости с потенциометра
+  else{
     val=analogRead(potens);
     val=map(val,0,1023,0,255);
     val=constrain(val,0, 255);
     analogWrite(shim, val);
-    off_delay=millis();
-    night=700;
   }
-  else{
-    if (millis()-off_delay>(10*1000)){
-      off_delay=millis();
-      analogWrite(shim, 0);
-      night=800;
-    }
-  }
+  //Вызываем функции
   butt_check();
+  on_check();
 }
+
+//--------------------------//
+//Функция опроса состояния кнопки
 void butt_check(){
-  if (digitalRead(butt)==LOW && flag && (millis()-butt_delay>150)){
-    butt_delay=millis();
-    flag=!flag;
-    led=!led;
-    analogWrite(shim, 0);
+  //Если кнопка нажата, при этом если кнопку не отпускать, то вновь эта часть выполняться не будет. Плюс учет дребезга кнопки
+  if (digitalRead(butt)==LOW && flag && (millis()-butt_delay>drebezg)){
+      butt_delay=millis();
+      flag=!flag;
+      //Включение/выключение
+      led=!led;
+      //На всякий случай на мгновение выключаем свет (не заметно для глаза)
+      analogWrite(shim, 0);
   }
-  if (digitalRead(butt)==HIGH && !flag && (millis()-butt_delay>150)){
+  //Если кнопка отпущена, при этом эта часть выполняется лишь один раз, если кнопка вновь не нажата. Плюс учет дребезга кнопки
+  if (digitalRead(butt)==HIGH && !flag && (millis()-butt_delay>drebezg)){
     butt_delay=millis();
     flag=!flag;
+  }
+  //Если прошло время достаточное для удержания, то меняем режим работы
+  if (digitalRead(butt)==LOW && (millis()-butt_delay>hold) && !flag){
+    butt_delay=millis();
+    AO=!AO;
+  }
+}
+
+//------------------------//
+//Функция проверки включения
+void on_check(){
+  //Если система велючена или прошло более 5 секунд
+  if (led || (millis()-ind_delay>5000) || AO){
+    //Выключаем сигнальный светодиод
+    digitalWrite(ind, LOW);
+    ind_delay=millis();
+  }
+  //Если система выключена, было обнаружено движение и при это нет режима постоянного света, то включаем сигнальный светодиод
+  if (!led   && (digitalRead(dviz)==1) && !AO){
+    digitalWrite(ind, HIGH);
+    ind_delay=millis();
   }
 }
